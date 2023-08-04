@@ -62,7 +62,7 @@ def inv_logdet(v, Y_ct, R, R_inv, logdet_R):
         logdet = y_dim * torch.log(sc).squeeze(-1).squeeze(-1) + 2 * I_YTRinvY_chol_sc.diagonal(dim1=-2, dim2=-1).log().sum(-1) + logdet_R
     return invv, logdet  # (*bs, bs2, y_dim), (*bs)
 
-def EnKF(ode_func, obs_func, t_obs, y_obs, N_ensem, init_m, init_C_param, model_Q_param, noise_R_param, device, 
+def EnKF(ode_func, obs_func, t_obs, y_obs, N_ensem, init_m, init_C_param, model_Q_param, noise_R_param, device, dec=None,
                     init_X=None, ode_method='rk4', ode_options=None, adjoint=True, adjoint_method='rk4', adjoint_options=None, save_filter_step={'mean'},
                     smooth_lag=0, t0=0., var_inflation=None, localization_radius=None, compute_likelihood=True, linear_obs=True, time_varying_obs=False,
                     save_first=False, tqdm=None, **ode_kwargs):
@@ -87,6 +87,7 @@ def EnKF(ode_func, obs_func, t_obs, y_obs, N_ensem, init_m, init_C_param, model_
         noise_R_param (noise.AddGaussian): observation error covariance
 
     Optional args:
+        dec (torch.nn.Module): (NEW, ROAD-EnKF only) Set this to the decoder in ROAD-EnKF ('obs_func' should also contain the decoder).
         init_X (tensor): Tensor of shape (*bs, N_ensem, x_dim). Initial ensemble if pre-specified.
         ode_method: Numerical scheme for forward equation. We use 'euler' or 'rk4'. Other solvers are available. See https://github.com/rtqichen/torchdiffeq
         ode_options: Set it to dict(step_size=...) for fixed step solvers for the forward equation. Adaptive solvers are also available - see the link above.
@@ -97,6 +98,8 @@ def EnKF(ode_func, obs_func, t_obs, y_obs, N_ensem, init_m, init_C_param, model_
         save_filter_step:
             If contains 'mean', then particle means will be saved.
             If contains 'particles', then all particles will be saved.
+            (NEW, ROAD-EnKF only) If contains 'decoder_mean', then particles will be passed through the decoder and their mean will be saved.
+            (NEW, ROAD-EnKF only) If contains 'decoder_particles', then particles will be passed through the decoder and saved.
             (Note: the up-to-date/final particles will always be returned seperately)
         t0: The timestamp at which the ensemble is initialized.
             By default, we DO NOT assume observation is available at t0. Slight modifications of the code are needed to handle this situation.
@@ -150,8 +153,15 @@ def EnKF(ode_func, obs_func, t_obs, y_obs, N_ensem, init_m, init_C_param, model_
         X_m = X.mean(dim=-2)
         res['mean'] = torch.empty(n_obs + 1, *bs, x_dim, dtype=init_m.dtype, device=device)
         res['mean'][0] = X_m.detach()
-
-
+    with torch.no_grad():
+        if dec is not None and 'decoder_particles' in save_filter_step:
+            FX = dec(X)
+            res['decoder_particles'] = torch.empty(n_obs + 1, *bs, N_ensem, FX.shape[-1], dtype=init_m.dtype, device=device)
+            res['decoder_particles'][0] = FX
+        if dec is not None and 'decoder_mean' in save_filter_step:
+            FX_m = dec(X).mean(dim=-2)
+            res['decoder_mean'] = torch.empty(n_obs + 1, *bs, FX_m.shape[-1], dtype=init_m.dtype, device=device)
+            res['decoder_mean'][0] = FX_m
     step_size = ode_options['step_size']
 
     t_cur = t0
@@ -221,6 +231,13 @@ def EnKF(ode_func, obs_func, t_obs, y_obs, N_ensem, init_m, init_C_param, model_
         if 'mean' in save_filter_step:
             X_m = X.mean(dim=-2)
             res['mean'][j+1] = X_m.detach()
+        with torch.no_grad():
+            if dec is not None and 'decoder_particles' in save_filter_step:
+                FX = dec(X)
+                res['decoder_particles'][j+1] = FX
+            if dec is not None and 'decoder_mean' in save_filter_step:
+                FX_m = dec(X).mean(dim=-2)
+                res['decoder_mean'][j+1] = FX_m
 
     if not save_first:
         for key in res.keys():

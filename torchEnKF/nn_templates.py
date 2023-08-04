@@ -19,11 +19,10 @@ class Linear(nn.Module):
     return out
 
 class Lorenz63(nn.Module):
-  def __init__(self, coeff, x_dim=3):
+  def __init__(self, coeff):
     super().__init__()
     self.coeff = nn.Parameter(coeff)
-    self.x_dim = x_dim
-  
+
   def forward(self, t, u):
     # (*bs * x_dim) -> (*bs * x_dim)
     sigma, beta, rho = self.coeff
@@ -168,4 +167,3 @@ class FODE_Net(nn.Module):
     x = self.fc2(x)  # (bs, x_dim, 1)
 
     return x.view(*bs, self.x_dim)
-
